@@ -1,0 +1,6 @@
+__pycache__/
+.env
+*.json
+.ipynb_checkpoints/
+*.pt
+*.bin
