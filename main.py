@@ -56,7 +56,7 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 # Gemini model for OCR and grading
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 # Persistence for Answer Keys (Temporary JSON)
 ANSWER_KEYS_FILE = "answer_keys.json"
