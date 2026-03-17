@@ -3,8 +3,9 @@ import io
 import json
 import base64
 from typing import Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 from pydantic import BaseModel
 from PIL import Image
@@ -16,6 +17,30 @@ import google.generativeai as genai
 load_dotenv()
 
 app = FastAPI(title="EdulinkX Autograder API")
+
+# --- API Key Authentication Middleware ---
+AUTOGRADER_SECRET_KEY = os.getenv("AUTOGRADER_SECRET_KEY")
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Allow health check without auth
+        if request.url.path == "/" or request.url.path == "/docs" or request.url.path == "/openapi.json":
+            return await call_next(request)
+
+        # Check API key
+        api_key = request.headers.get("X-API-Key")
+        if not AUTOGRADER_SECRET_KEY:
+            # If no key is configured, allow all (dev mode)
+            return await call_next(request)
+        if api_key != AUTOGRADER_SECRET_KEY:
+            from starlette.responses import JSONResponse
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing API key"}
+            )
+        return await call_next(request)
+
+app.add_middleware(APIKeyMiddleware)
 
 # CORS setup
 app.add_middleware(
@@ -78,14 +103,11 @@ async def upload_answer_key(file: UploadFile = File(...), exam_id: str = Form(..
 def perform_ocr_gemini(image_bytes: bytes) -> str:
     """
     Use Gemini Vision to extract handwritten text from an image.
-    Returns the extracted text as a string.
     """
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API Key not configured")
 
     model = genai.GenerativeModel(GEMINI_MODEL)
-
-    # Encode image to base64 for the API
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
     response = model.generate_content([
@@ -108,14 +130,12 @@ Rules:
 
 def grade_with_gemini_vision(image_bytes: bytes, expected_answer: str, prompt: Optional[str] = None) -> dict:
     """
-    Use Gemini Vision to read the student's handwritten answer directly from the image
-    and grade it against the expected answer — all in one API call.
+    Use Gemini Vision to read and grade a handwritten answer in one shot.
     """
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API Key not configured")
 
     model = genai.GenerativeModel(GEMINI_MODEL)
-
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
     grading_prompt = f"""You are an expert exam grader. Look at this student's handwritten answer image and grade it.
@@ -148,6 +168,40 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code blocks):
     return result
 
 
+def grade_text_with_gemini(student_answer: str, expected_answer: str, question_context: Optional[str] = None) -> dict:
+    """
+    Use Gemini to semantically grade a typed text answer (no image needed).
+    """
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Gemini API Key not configured")
+
+    model = genai.GenerativeModel(GEMINI_MODEL)
+
+    grading_prompt = f"""You are an expert exam grader. Grade the student's answer against the expected answer.
+
+Question: {question_context if question_context else "Determine from the answer context"}
+Expected Answer: {expected_answer}
+Student's Answer: {student_answer}
+
+Instructions:
+1. Compare the student's answer with the expected answer.
+2. Rate on a scale of 0 to 100 based on accuracy and conceptual understanding.
+3. Be fair — award marks for partially correct answers.
+4. Provide constructive feedback.
+
+Respond ONLY with valid JSON in this exact format (no markdown, no code blocks):
+{{"score": number, "feedback": "your feedback"}}"""
+
+    response = model.generate_content(grading_prompt)
+
+    try:
+        result = json.loads(response.text.replace('```json', '').replace('```', '').strip())
+    except Exception:
+        result = {"score": 0, "feedback": "Error parsing Gemini response", "raw": response.text}
+
+    return result
+
+
 @app.post("/grade-image")
 async def grade_image(
     file: UploadFile = File(...),
@@ -171,7 +225,6 @@ async def grade_image(
 
     # 3. Grading Logic
     if method == "similarity":
-        # Gemini extracts text → fuzzy match with answer key
         student_text = perform_ocr_gemini(contents)
         score_percentage = fuzz.token_sort_ratio(student_text.lower(), expected_answer.lower())
         final_marks = 100 if score_percentage >= 85 else 0
@@ -185,11 +238,45 @@ async def grade_image(
         }
 
     elif method == "gemini":
-        # Gemini reads image + grades directly in one shot
         grading_result = grade_with_gemini_vision(contents, expected_answer, gemini_prompt)
 
         return {
             "student_text": grading_result.get("student_text", ""),
+            "grading_result": grading_result
+        }
+
+    else:
+        raise HTTPException(status_code=400, detail="Invalid grading method. Use 'similarity' or 'gemini'.")
+
+
+@app.post("/grade-text")
+async def grade_text(
+    student_answer: str = Form(...),
+    expected_answer: str = Form(...),
+    method: str = Form("gemini"),  # "similarity" or "gemini"
+    question_context: Optional[str] = Form(None)
+):
+    """
+    Grade a typed text answer (no image needed).
+    Used for short-answer exams where students type their response.
+    """
+    if method == "similarity":
+        score_percentage = fuzz.token_sort_ratio(student_answer.lower(), expected_answer.lower())
+        final_marks = 100 if score_percentage >= 85 else 0
+
+        return {
+            "student_answer": student_answer,
+            "expected_answer": expected_answer,
+            "similarity_score": score_percentage,
+            "final_marks": final_marks,
+            "passed": score_percentage >= 85
+        }
+
+    elif method == "gemini":
+        grading_result = grade_text_with_gemini(student_answer, expected_answer, question_context)
+
+        return {
+            "student_answer": student_answer,
             "grading_result": grading_result
         }
 
