@@ -1,14 +1,10 @@
 fastapi
 uvicorn
-paddleocr
-transformers
-torch
-pillow
 google-generativeai
 pdfplumber
 fuzzywuzzy
 python-Levenshtein
 pydantic
 python-multipart
-opencv-python
 python-dotenv
+pillow
