@@ -56,7 +56,7 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 # Gemini model for OCR and grading
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODEL = "gemini-1.5-flash"
 
 # Persistence for Answer Keys (Temporary JSON)
 ANSWER_KEYS_FILE = "answer_keys.json"
@@ -150,7 +150,7 @@ Instructions:
 4. Provide constructive feedback.
 
 Respond ONLY with valid JSON in this exact format (no markdown, no code blocks):
-{{"student_text": "what you read from the image", "score": number, "feedback": "your feedback"}}"""
+{{"student_text": "what you read from the image", "score": number, "feedback": "your feedback"}}"""      
 
     response = model.generate_content([
         {
@@ -186,7 +186,7 @@ Student's Answer: {student_answer}
 Instructions:
 1. Compare the student's answer with the expected answer.
 2. Rate on a scale of 0 to 100 based on accuracy and conceptual understanding.
-3. Be fair â€” award marks for partially correct answers.
+3. Be fair — award marks for partially correct answers.
 4. Provide constructive feedback.
 
 Respond ONLY with valid JSON in this exact format (no markdown, no code blocks):
@@ -261,7 +261,7 @@ async def grade_text(
     Used for short-answer exams where students type their response.
     """
     if method == "similarity":
-        score_percentage = fuzz.token_sort_ratio(student_answer.lower(), expected_answer.lower())
+        score_percentage = fuzz.token_sort_ratio(student_answer.lower(), expected_answer.lower())        
         final_marks = 100 if score_percentage >= 85 else 0
 
         return {
@@ -273,7 +273,7 @@ async def grade_text(
         }
 
     elif method == "gemini":
-        grading_result = grade_text_with_gemini(student_answer, expected_answer, question_context)
+        grading_result = grade_text_with_gemini(student_answer, expected_answer, question_context)       
 
         return {
             "student_answer": student_answer,
@@ -285,4 +285,6 @@ async def grade_text(
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
