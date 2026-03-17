@@ -186,7 +186,7 @@ Student's Answer: {student_answer}
 Instructions:
 1. Compare the student's answer with the expected answer.
 2. Rate on a scale of 0 to 100 based on accuracy and conceptual understanding.
-3. Be fair — award marks for partially correct answers.
+3. Be fair - award marks for partially correct answers.
 4. Provide constructive feedback.
 
 Respond ONLY with valid JSON in this exact format (no markdown, no code blocks):
@@ -287,4 +287,3 @@ async def grade_text(
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
