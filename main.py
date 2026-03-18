@@ -114,23 +114,30 @@ async def root():
 
 @app.post("/upload-answer-key")
 async def upload_answer_key(file: UploadFile = File(...), exam_id: str = Form(...)):
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    print(f"[Autograder] Received answer key upload for exam {exam_id}. Filename: {file.filename}")
+    
+    try:
+        extracted_data = []
+        with pdfplumber.open(file.file) as pdf:
+            full_text = ""
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    full_text += text + "\n"
 
-    extracted_data = []
-    with pdfplumber.open(file.file) as pdf:
-        full_text = ""
-        for page in pdf.pages:
-            full_text += page.extract_text() + "\n"
+            # Split by "Question" keyword (customize based on your PDF format)
+            extracted_data = full_text.split("Question")
 
-        # Split by "Question" keyword (customize based on your PDF format)
-        extracted_data = full_text.split("Question")
+        answer_keys = load_answer_keys()
+        answer_keys[exam_id] = extracted_data
+        save_answer_keys(answer_keys)
 
-    answer_keys = load_answer_keys()
-    answer_keys[exam_id] = extracted_data
-    save_answer_keys(answer_keys)
-
-    return {"message": "Answer key uploaded and parsed", "exam_id": exam_id}
+        print(f"[Autograder] Answer key for {exam_id} parsed successfully. {len(extracted_data)} questions found.")
+        return {"message": "Answer key uploaded and parsed", "exam_id": exam_id, "questions_parsed": len(extracted_data)}
+        
+    except Exception as e:
+        print(f"[Autograder] Error parsing PDF for exam {exam_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to parse PDF: {str(e)}")
 
 
 def perform_ocr_gemini(image_bytes: bytes) -> str:
