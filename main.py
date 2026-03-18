@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import json
 import base64
 from typing import Optional
@@ -55,8 +56,40 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Gemini model for OCR and grading
-GEMINI_MODEL = "gemini-2.5-flash"
+# Gemini model for OCR and grading (use flash-lite for predictable non-thinking output)
+GEMINI_MODEL = "gemini-2.5-flash-lite"
+
+
+def extract_json_from_text(text: str) -> dict:
+    """
+    Robustly extract JSON from Gemini response text.
+    Handles markdown code blocks, extra text around JSON, etc.
+    """
+    cleaned = text.strip()
+    
+    # 1. Try direct parse
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    
+    # 2. Remove markdown code fences
+    cleaned = cleaned.replace('```json', '').replace('```', '').strip()
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    
+    # 3. Regex: find first { ... } block
+    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned)
+    if match:
+        try:
+            return json.loads(match.group())
+        except Exception:
+            pass
+    
+    # 4. All parsing failed
+    return None
 
 # Persistence for Answer Keys (Temporary JSON)
 ANSWER_KEYS_FILE = "answer_keys.json"
@@ -152,20 +185,26 @@ Instructions:
 Respond ONLY with valid JSON in this exact format (no markdown, no code blocks):
 {{"student_text": "what you read from the image", "score": number, "feedback": "your feedback"}}"""      
 
-    response = model.generate_content([
-        {
-            "mime_type": "image/jpeg",
-            "data": image_b64
-        },
-        grading_prompt
-    ])
-
     try:
-        result = json.loads(response.text.replace('```json', '').replace('```', '').strip())
-    except Exception:
-        result = {"student_text": "", "score": 0, "feedback": "Error parsing Gemini response", "raw": response.text}
-
-    return result
+        response = model.generate_content([
+            {
+                "mime_type": "image/jpeg",
+                "data": image_b64
+            },
+            grading_prompt
+        ])
+        raw_text = response.text
+        print(f"[Gemini Vision Grade] Raw response: {raw_text[:500]}")
+        
+        result = extract_json_from_text(raw_text)
+        if result and "score" in result:
+            return result
+        else:
+            print(f"[Gemini Vision Grade] Failed to extract JSON from: {raw_text[:500]}")
+            return {"student_text": "", "score": 0, "feedback": "Error parsing Gemini response", "raw": raw_text}
+    except Exception as e:
+        print(f"[Gemini Vision Grade] API Error: {str(e)}")
+        return {"student_text": "", "score": 0, "feedback": f"Gemini API error: {str(e)}"}
 
 
 def grade_text_with_gemini(student_answer: str, expected_answer: str, question_context: Optional[str] = None) -> dict:
@@ -187,19 +226,26 @@ Instructions:
 1. Compare the student's answer with the expected answer.
 2. Rate on a scale of 0 to 100 based on accuracy and conceptual understanding.
 3. Be fair - award marks for partially correct answers.
-4. Provide constructive feedback.
+4. If the student's answer is essentially the same as the expected answer (even with minor differences in wording), give a score of 90-100.
+5. Provide constructive feedback.
 
 Respond ONLY with valid JSON in this exact format (no markdown, no code blocks):
 {{"score": number, "feedback": "your feedback"}}"""
 
-    response = model.generate_content(grading_prompt)
-
     try:
-        result = json.loads(response.text.replace('```json', '').replace('```', '').strip())
-    except Exception:
-        result = {"score": 0, "feedback": "Error parsing Gemini response", "raw": response.text}
-
-    return result
+        response = model.generate_content(grading_prompt)
+        raw_text = response.text
+        print(f"[Gemini Grade Text] Raw response: {raw_text[:500]}")
+        
+        result = extract_json_from_text(raw_text)
+        if result and "score" in result:
+            return result
+        else:
+            print(f"[Gemini Grade Text] Failed to extract JSON from: {raw_text[:500]}")
+            return {"score": 0, "feedback": "Error parsing Gemini response", "raw": raw_text}
+    except Exception as e:
+        print(f"[Gemini Grade Text] API Error: {str(e)}")
+        return {"score": 0, "feedback": f"Gemini API error: {str(e)}"}
 
 
 @app.post("/grade-image")
