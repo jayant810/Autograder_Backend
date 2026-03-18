@@ -141,9 +141,9 @@ async def upload_answer_key(file: UploadFile = File(...), exam_id: str = Form(..
         raise HTTPException(status_code=400, detail=f"Failed to parse PDF: {str(e)}")
 
 
-def perform_ocr_gemini(image_bytes: bytes) -> str:
+def perform_ocr_gemini(image_bytes: bytes, mime_type: str = "image/jpeg") -> str:
     """
-    Use Gemini Vision to extract handwritten text from an image.
+    Use Gemini Vision to extract handwritten text from an image or pdf.
     """
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API Key not configured")
@@ -153,7 +153,7 @@ def perform_ocr_gemini(image_bytes: bytes) -> str:
 
     response = model.generate_content([
         {
-            "mime_type": "image/jpeg",
+            "mime_type": mime_type,
             "data": image_b64
         },
         """You are a precise OCR engine for handwritten student exam answers.
@@ -169,9 +169,9 @@ Rules:
     return response.text.strip()
 
 
-def grade_with_gemini_vision(image_bytes: bytes, expected_answer: str, prompt: Optional[str] = None) -> dict:
+def grade_with_gemini_vision(image_bytes: bytes, expected_answer: str, prompt: Optional[str] = None, mime_type: str = "image/jpeg") -> dict:
     """
-    Use Gemini Vision to read and grade a handwritten answer in one shot.
+    Use Gemini Vision to read and grade a handwritten answer (or PDF) in one shot.
     """
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API Key not configured")
@@ -179,13 +179,13 @@ def grade_with_gemini_vision(image_bytes: bytes, expected_answer: str, prompt: O
     model = genai.GenerativeModel(GEMINI_MODEL)
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-    grading_prompt = f"""You are an expert exam grader. Look at this student's handwritten answer image and grade it.
+    grading_prompt = f"""You are an expert exam grader. Look at this student's handwritten answer image/document and grade it.
 
 Question Context: {prompt if prompt else "Determine from the answer context"}
 Expected Answer: {expected_answer}
 
 Instructions:
-1. First, read the handwritten text from the image carefully.
+1. First, read the handwritten text from the document carefully.
 2. Compare it with the expected answer.
 3. Rate on a scale of 0 to 100 based on accuracy and conceptual understanding.
 4. Provide constructive feedback.
@@ -196,7 +196,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code blocks):
     try:
         response = model.generate_content([
             {
-                "mime_type": "image/jpeg",
+                "mime_type": mime_type,
                 "data": image_b64
             },
             grading_prompt
@@ -305,8 +305,10 @@ async def grade_image(
         raise HTTPException(status_code=400, detail="Question index out of bounds")
 
     # 3. Grading Logic
+    mime_type = file.content_type if file.content_type else "application/pdf"
+    
     if method == "similarity":
-        student_text = perform_ocr_gemini(contents)
+        student_text = perform_ocr_gemini(contents, mime_type=mime_type)
         score_percentage = fuzz.token_sort_ratio(student_text.lower(), expected_answer.lower())
         final_marks = 100 if score_percentage >= 85 else 0
 
@@ -319,7 +321,7 @@ async def grade_image(
         }
 
     elif method == "gemini":
-        grading_result = grade_with_gemini_vision(contents, expected_answer, gemini_prompt)
+        grading_result = grade_with_gemini_vision(contents, expected_answer, gemini_prompt, mime_type=mime_type)
 
         return {
             "student_text": grading_result.get("student_text", ""),
