@@ -3,6 +3,7 @@ import io
 import re
 import json
 import base64
+import requests
 from typing import Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -261,15 +262,42 @@ async def grade_image(
     exam_id: str = Form(...),
     question_idx: int = Form(...),
     method: str = Form("similarity"),  # "similarity" or "gemini"
-    gemini_prompt: Optional[str] = Form(None)
+    gemini_prompt: Optional[str] = Form(None),
+    answer_key_url: Optional[str] = Form(None)
 ):
     # 1. Read Image
     contents = await file.read()
 
     # 2. Get expected answer from answer key
     answer_keys = load_answer_keys()
+    
+    # If the answer key was wiped (e.g. Render spin-down), fetch it on the fly!
     if exam_id not in answer_keys:
-        raise HTTPException(status_code=404, detail="Answer key for this exam not found")
+        if answer_key_url:
+            print(f"[Autograder] Answer key {exam_id} not cached. Fetching on-the-fly from {answer_key_url}")
+            try:
+                response = requests.get(answer_key_url)
+                response.raise_for_status()
+                pdf_bytes = io.BytesIO(response.content)
+                
+                extracted_data = []
+                with pdfplumber.open(pdf_bytes) as pdf:
+                    full_text = ""
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if text:
+                            full_text += text + "\n"
+                    # Split exactly how we do in /upload-answer-key
+                    extracted_data = full_text.split("Question")
+                    
+                answer_keys[exam_id] = extracted_data
+                save_answer_keys(answer_keys)
+                print(f"[Autograder] Successfully parsed on-the-fly answer key for {exam_id}")
+            except Exception as e:
+                print(f"[Autograder] Failed to fetch/parse on-the-fly answer key: {str(e)}")
+                raise HTTPException(status_code=404, detail=f"Failed to fetch/parse answer key for this exam on-the-fly: {str(e)}")
+        else:
+            raise HTTPException(status_code=404, detail="Answer key for this exam not found and no URL provided")
 
     try:
         expected_answer = answer_keys[exam_id][question_idx]
